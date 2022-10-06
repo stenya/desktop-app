@@ -52,6 +52,7 @@ import { DaemonConnectionType, ColorTheme } from "@/store/types";
 import daemonClient from "./daemon-client";
 import darwinDaemonInstaller from "./daemon-client/darwin-installer";
 import { InitTray } from "./tray";
+import { InitNotifications } from "./notifications";
 import { InitPersistentSettings, SaveSettings } from "./settings-persistent";
 import { InitConnectionResumer } from "./connection-resumer";
 import { InitTrustedNetworks } from "./trusted-wifi";
@@ -277,6 +278,7 @@ if (gotTheLock) {
         CheckUpdates();
         createUpdateWindow();
       });
+      InitNotifications(menuOnShow);
       isTrayInitialized = true;
     } catch (e) {
       console.error(e);
