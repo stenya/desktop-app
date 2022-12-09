@@ -38,12 +38,21 @@ func IsDefaultRoutingInterface(interfaceName string) (bool, error) {
 	}
 
 	for _, r := range routes {
-		if strings.Compare(r.interfaceName, interfaceName) == 0 {
+		if strings.Compare(r.InterfaceName, interfaceName) == 0 {
 			return true, nil
 		}
 	}
 
 	return false, nil
+}
+
+func DefaultRoute() (route Route, err error) {
+	routes, e := doGetDefaultRoutes(false)
+	if e != nil {
+		return Route{}, e
+	}
+
+	return routes[0], nil
 }
 
 // doDefaultGatewayIP - returns: default gateway
@@ -53,15 +62,15 @@ func doDefaultGatewayIP() (defGatewayIP net.IP, err error) {
 		return nil, e
 	}
 
-	return routes[0].gatewayIP, nil
+	return routes[0].GatewayIP, nil
 }
 
-type route struct {
-	gatewayIP     net.IP
-	interfaceName string
+type Route struct {
+	GatewayIP     net.IP
+	InterfaceName string
 }
 
-func doGetDefaultRoutes(getAllDefRoutes bool) (routes []route, err error) {
+func doGetDefaultRoutes(getAllDefRoutes bool) (routes []Route, err error) {
 	// Expected output of "netstat -nr" command:
 	//	Routing tables
 	//	Internet:
@@ -71,7 +80,7 @@ func doGetDefaultRoutes(getAllDefRoutes bool) (routes []route, err error) {
 	//	127                127.0.0.1          UCS            lo0
 	// ...
 
-	routes = make([]route, 0, 3)
+	routes = make([]Route, 0, 3)
 
 	log.Info("Checking default getaway info ...")
 	cmd := exec.Command("/usr/sbin/netstat", "-nr", "-f", "inet")
@@ -109,7 +118,7 @@ func doGetDefaultRoutes(getAllDefRoutes bool) (routes []route, err error) {
 			continue
 		}
 
-		routes = append(routes, route{gatewayIP: gatewayIP, interfaceName: interfaceName})
+		routes = append(routes, Route{GatewayIP: gatewayIP, InterfaceName: interfaceName})
 	}
 
 	if len(routes) <= 0 {

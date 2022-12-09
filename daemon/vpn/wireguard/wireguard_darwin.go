@@ -48,6 +48,29 @@ const (
 	strTriggerAddrAlreadyInUse string = "Address already in use"
 )
 
+// IsUpdateDefaultRoute determines the style of default route configuration
+//
+// Normally, the "0/1 <VPN_GW>..." route is in use
+// But such route configuration breaks iCloud synchronization (e.f. Safari bookmarks not synchronizing when VPN connected)
+// Info: iCloud synchronization ignores the "0/1" route and uses "default" with higher priority, but this direct route is not workable when VPN is connected.
+//
+// To fix this problem, the routing must be configured in a different way:
+//  1. The original default route must be scoped to the default interface (this will allow us to create a new default route to the VPN gateway)
+//     *Note: do not forget to restore this to the original state after VPN disconnect (the standalone scoped 'default' route does not work for some reason)
+//  2. Use "default <VPN_GW>..." route to access VPN gateway
+//
+// Example:
+//
+//	(IsUpdateDefaultRoute==false):
+//	  Destination        Gateway            Flags           Netif Expire
+//	  0/1                172.16.0.1         UGScg           utun6
+//	  default            192.168.0.1        UGScg             en0
+//	(IsUpdateDefaultRoute==true):
+//	  Destination        Gateway            Flags           Netif Expire
+//	  default            172.16.0.1         UGScg           utun6
+//	  default            192.168.0.1        UGScIg            en0
+const IsUpdateDefaultRoute bool = true
+
 const subnetMask string = "255.0.0.0"
 const subnetMaskPrefixLenIPv6 string = "64"
 
@@ -56,7 +79,9 @@ type internalVariables struct {
 	// WG running process (shell command)
 	command       *exec.Cmd
 	isGoingToStop bool
-	defGateway    net.IP
+	defaultRoute  netinfo.Route
+
+	isDefaultRouteUpdated bool // 'true' if the default route successfully updated (see: IsUpdateDefaultRoute == true)
 
 	isPaused      bool
 	omResumedChan chan struct{} // channel for 'On Resume' events
@@ -109,12 +134,12 @@ func (wg *WireGuard) internalConnect(stateChan chan<- vpn.StateInfo) error {
 	}
 
 	// get default Gateway IP
-	defaultGwIP, err := netinfo.DefaultGatewayIP()
+	defaultRoute, err := netinfo.DefaultRoute()
 	if err != nil {
-		log.Error(fmt.Sprintf("Failed to detect default getway: %s", err))
+		log.Error(fmt.Sprintf("Failed to detect default gateway: %s", err))
 		return err
 	}
-	wg.internals.defGateway = defaultGwIP
+	wg.internals.defaultRoute = defaultRoute
 
 	if wg.internals.isGoingToStop {
 		return nil
@@ -413,24 +438,70 @@ func (wg *WireGuard) setRoutes() error {
 	}
 
 	// Update main route
-	// example command:	route	-n	add	-net	0/1			10.0.0.1
-	// 					route	-n	add	-inet	0.0.0.0/1	-interface utun2
-	if err := shell.Exec(log, "/sbin/route", "-n", "add", "-inet", "-net", "0/1", wg.connectParams.hostLocalIP.String()); err != nil {
-		return fmt.Errorf("adding route shell comand error : %w", err)
+	wg.internals.isDefaultRouteUpdated = false
+	if IsUpdateDefaultRoute {
+		func() (retErr error) {
+			isDefaultRouteDeleted := false
+			defer func() {
+				if retErr == nil {
+					wg.internals.isDefaultRouteUpdated = true
+				} else {
+					log.Error(retErr)
+					// In case of error - revert changes were made
+					shell.Exec(log, "/sbin/route", "-n", "delete", "default", wg.internals.defaultRoute.GatewayIP.String(), "-ifscope", wg.internals.defaultRoute.InterfaceName)
+					shell.Exec(log, "/sbin/route", "-n", "delete", "default", wg.connectParams.hostLocalIP.String())
+					if isDefaultRouteDeleted {
+						shell.Exec(log, "/sbin/route", "-n", "add", "default", wg.internals.defaultRoute.GatewayIP.String())
+					}
+				}
+			}()
+			// Example:
+			//	  Destination        Gateway            Flags           Netif Expire
+			//	  default            172.16.0.1         UGScg           utun6
+			//	  default            192.168.0.1        UGScIg            en0
+			//
+			//	route add default ${_argDefGwIp} -ifscope ${_argDefGwInterface}
+			//	route delete default {DEF_INTERFACE}
+			//	route add default ${_argLocalVpnHostIp}
+
+			//  The original default route must be scoped to the default interface (this will allow us to create a new default route to the VPN gateway)
+			//    *Note: do not forget to restore this to the original state after VPN disconnect (the standalone scoped 'default' route does not work for some reason)
+			if err := shell.Exec(log, "/sbin/route", "-n", "add", "default", wg.internals.defaultRoute.GatewayIP.String(), "-ifscope", wg.internals.defaultRoute.InterfaceName); err != nil {
+				return fmt.Errorf("route shell command error : %w", err)
+			}
+			// 	Remove original default route
+			if err := shell.Exec(log, "/sbin/route", "-n", "delete", "default", wg.internals.defaultRoute.GatewayIP.String()); err != nil {
+				return fmt.Errorf("route shell command error : %w", err)
+			} else {
+				isDefaultRouteDeleted = true
+			}
+			//  Use "default <VPN_GW>..." route to access VPN gateway
+			if err := shell.Exec(log, "/sbin/route", "-n", "add", "default", wg.connectParams.hostLocalIP.String()); err != nil {
+				return fmt.Errorf("route shell command error : %w", err)
+			}
+			return nil
+		}()
+	}
+	if !wg.internals.isDefaultRouteUpdated {
+		// example command:	route	-n	add	-net	0/1			10.0.0.1
+		// 					route	-n	add	-inet	0.0.0.0/1	-interface utun2
+		if err := shell.Exec(log, "/sbin/route", "-n", "add", "-inet", "-net", "0/1", wg.connectParams.hostLocalIP.String()); err != nil {
+			return fmt.Errorf("adding route shell command error : %w", err)
+		}
 	}
 
 	// Update routing to remote server (remote_server default_router 255.255.255)
 	// example command:	route	-n	add	-net	145.239.239.55	192.168.1.1	255.255.255.255
 	//					route	-n	add	-inet	51.77.91.106	-gateway	192.168.1.1
-	if err := shell.Exec(log, "/sbin/route", "-n", "add", "-inet", "-net", wg.connectParams.hostIP.String(), wg.internals.defGateway.String(), "255.255.255.255"); err != nil {
-		return fmt.Errorf("adding route shell comand error : %w", err)
+	if err := shell.Exec(log, "/sbin/route", "-n", "add", "-inet", "-net", wg.connectParams.hostIP.String(), wg.internals.defaultRoute.GatewayIP.String(), "255.255.255.255"); err != nil {
+		return fmt.Errorf("adding route shell command error : %w", err)
 	}
 
 	// Update routing table
 	// example command:	route	-n	add	-net	128.0.0.0	10.0.0.1	128.0.0.0
 	// 					route	-n	add	-inet	128.0.0.0/1	-interface	utun2
 	if err := shell.Exec(log, "/sbin/route", "-n", "add", "-inet", "-net", "128.0.0.0", wg.connectParams.hostLocalIP.String(), "128.0.0.0"); err != nil {
-		return fmt.Errorf("adding route shell comand error : %w", err)
+		return fmt.Errorf("adding route shell command error : %w", err)
 	}
 
 	ipv6HostLocalIP := wg.connectParams.GetIPv6HostLocalIP()
@@ -439,10 +510,10 @@ func (wg *WireGuard) setRoutes() error {
 		// Since a more specific route always wins, this forces traffic to be routed via the VPN instead of over the default gateway.
 		// Additionally, this does not change the current 'default' route (do not break users configuration after disconnection).
 		if err := shell.Exec(log, "/sbin/route", "-n", "add", "-inet6", "-net", "::/1", ipv6HostLocalIP.String()); err != nil {
-			return fmt.Errorf("adding route shell comand error : %w", err)
+			return fmt.Errorf("adding route shell command error : %w", err)
 		}
 		if err := shell.Exec(log, "/sbin/route", "-n", "add", "-inet6", "-net", "8000::/1", ipv6HostLocalIP.String()); err != nil {
-			return fmt.Errorf("adding route shell comand error : %w", err)
+			return fmt.Errorf("adding route shell command error : %w", err)
 		}
 	}
 
@@ -451,6 +522,12 @@ func (wg *WireGuard) setRoutes() error {
 
 func (wg *WireGuard) removeRoutes() error {
 	log.Info("Restoring routing table...")
+
+	if wg.internals.isDefaultRouteUpdated {
+		shell.Exec(log, "/sbin/route", "-n", "delete", "default", wg.connectParams.hostLocalIP.String())
+		shell.Exec(log, "/sbin/route", "-n", "add", "default", wg.internals.defaultRoute.GatewayIP.String())
+		shell.Exec(log, "/sbin/route", "-n", "delete", "default", wg.internals.defaultRoute.GatewayIP.String(), "-ifscope", wg.internals.defaultRoute.InterfaceName)
+	}
 
 	shell.Exec(log, "/sbin/route", "-n", "delete", "-inet", "-net", "0/1", wg.connectParams.hostLocalIP.String())
 	shell.Exec(log, "/sbin/route", "-n", "delete", "-inet", "-net", wg.connectParams.hostIP.String())
@@ -468,19 +545,29 @@ func (wg *WireGuard) removeRoutes() error {
 }
 
 func (wg *WireGuard) onRoutingChanged() error {
-	defGatewayIP, err := netinfo.DefaultGatewayIP()
+	defRoute, err := netinfo.DefaultRoute()
 	if err != nil {
 		log.Warning(fmt.Sprintf("onRoutingChanged: %v", err))
 		return err
 	}
 
-	if defGatewayIP.String() != wg.internals.defGateway.String() {
-		log.Info(fmt.Sprintf("Default gateway changed: %s -> %s. Updating routes...", wg.internals.defGateway.String(), defGatewayIP.String()))
-		wg.internals.defGateway = defGatewayIP
+	needUpdateRoutes := false
+	if wg.internals.isDefaultRouteUpdated {
+		if !wg.connectParams.hostLocalIP.Equal(defRoute.GatewayIP) {
+			log.Info(fmt.Sprintf("Default gateway changed: %s -> %s. Updating routes...", wg.connectParams.hostLocalIP.String(), defRoute.GatewayIP.String()))
+			needUpdateRoutes = true
+
+		}
+	} else if !wg.internals.defaultRoute.GatewayIP.Equal(defRoute.GatewayIP) {
+		log.Info(fmt.Sprintf("Default gateway changed: %s -> %s. Updating routes...", wg.internals.defaultRoute.GatewayIP.String(), defRoute.GatewayIP.String()))
+		needUpdateRoutes = true
+	}
+
+	if needUpdateRoutes {
+		wg.internals.defaultRoute = defRoute
 		wg.removeRoutes()
 		wg.setRoutes()
 	}
-
 	return nil
 }
 
