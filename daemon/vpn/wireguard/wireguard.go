@@ -28,6 +28,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ivpn/desktop-app/daemon/helpers"
 	"github.com/ivpn/desktop-app/daemon/logger"
@@ -35,6 +36,8 @@ import (
 	"github.com/ivpn/desktop-app/daemon/service/dns"
 	"github.com/ivpn/desktop-app/daemon/vpn"
 )
+
+const HandshakeTimeout time.Duration = time.Second * 15
 
 var log *logger.Logger
 
@@ -119,6 +122,10 @@ func NewWireGuardObject(wgBinaryPath string, wgToolBinaryPath string, wgConfigFi
 		toolBinaryPath: wgToolBinaryPath,
 		configFilePath: wgConfigFilePath,
 		connectParams:  connectionParams}, nil
+}
+
+func (wg *WireGuard) GetTunnelName() string {
+	return wg.getTunnelName()
 }
 
 // DestinationIP -  Get destination IP (VPN host server or proxy server IP address)
@@ -264,6 +271,18 @@ func (wg *WireGuard) generateConfig() ([]string, error) {
 	peerCfg = append(peerCfg, pCgf...)
 
 	return append(interfaceCfg, peerCfg...), nil
+}
+
+func (wg *WireGuard) waitHandshakeAndNotifyConnected(stateChan chan<- vpn.StateInfo) error {
+	log.Info("Initialised")
+	err := wg.WaitForFirstHanshake(HandshakeTimeout)
+	if err != nil {
+		return err
+	}
+
+	log.Info("Connected")
+	wg.notifyConnectedStat(stateChan)
+	return nil
 }
 
 func (wg *WireGuard) notifyConnectedStat(stateChan chan<- vpn.StateInfo) {
