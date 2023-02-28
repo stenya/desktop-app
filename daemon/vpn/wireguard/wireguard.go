@@ -23,12 +23,12 @@
 package wireguard
 
 import (
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"net"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/ivpn/desktop-app/daemon/helpers"
 	"github.com/ivpn/desktop-app/daemon/logger"
@@ -36,8 +36,6 @@ import (
 	"github.com/ivpn/desktop-app/daemon/service/dns"
 	"github.com/ivpn/desktop-app/daemon/vpn"
 )
-
-const HandshakeTimeout time.Duration = time.Second * 15
 
 var log *logger.Logger
 
@@ -105,7 +103,9 @@ type WireGuard struct {
 	configFilePath string
 	connectParams  ConnectionParams
 	localPort      int
-	isDisconnected bool
+
+	isDisconnected        bool
+	isDisconnectRequested bool
 
 	// Must be implemented (AND USED) in correspond file for concrete platform. Must contain platform-specified properties (or can be empty struct)
 	internals internalVariables
@@ -157,6 +157,7 @@ func (wg *WireGuard) Connect(stateChan chan<- vpn.StateInfo) error {
 
 	disconnectDescription := ""
 	wg.isDisconnected = false
+	wg.isDisconnectRequested = false
 	stateChan <- vpn.NewStateInfo(vpn.CONNECTING, "")
 	defer func() {
 		wg.isDisconnected = true
@@ -185,6 +186,7 @@ func (wg *WireGuard) Connect(stateChan chan<- vpn.StateInfo) error {
 
 // Disconnect stops the connection
 func (wg *WireGuard) Disconnect() error {
+	wg.isDisconnectRequested = true
 	return wg.disconnect()
 }
 
@@ -275,12 +277,20 @@ func (wg *WireGuard) generateConfig() ([]string, error) {
 
 func (wg *WireGuard) waitHandshakeAndNotifyConnected(stateChan chan<- vpn.StateInfo) error {
 	log.Info("Initialised")
-	err := wg.WaitForFirstHanshake(HandshakeTimeout)
+
+	// Check connectivity: wait for first handshake
+	// No timeout defined; function returns only when handshake received or wg.isDisconnectRequested == true
+	err := WaitForWireguardFirstHanshake(wg.GetTunnelName(), 0, &wg.isDisconnectRequested, func(mes string) { log.Info(mes) })
 	if err != nil {
-		return err
+		if errors.Is(err, WgHandshakeTimeoutError{}) {
+			return err
+		} else {
+			log.Error(err) // not handshake timeout. Probably internal issue with 'wgctrl'. Just print error in log
+		}
+	} else {
+		log.Info("Connected") // no errors - handshake received
 	}
 
-	log.Info("Connected")
 	wg.notifyConnectedStat(stateChan)
 	return nil
 }

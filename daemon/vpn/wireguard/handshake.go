@@ -29,9 +29,33 @@ import (
 	"golang.zx2c4.com/wireguard/wgctrl"
 )
 
-func (wg *WireGuard) WaitForFirstHanshake(timeout time.Duration) error {
+type WgHandshakeTimeoutError struct {
+}
+
+func (e WgHandshakeTimeoutError) Error() string {
+	return "WireGuard handshake timeout"
+}
+
+// WaitForFirstHanshake waits for a ahndshake during 'timeout' time.
+// If no handshake occured - returns WgHandshakeTimeoutError
+// If timeout == 0 - function returns only when isStop changed to true
+func WaitForWireguardFirstHanshake(tunnelName string, timeout time.Duration, isStop *bool, logFunc func(string)) (retErr error) {
+	if timeout == 0 && isStop == nil {
+		return fmt.Errorf("internal error: bad arguments for WaitForWireguardFirstHanshake")
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			if err, ok := r.(error); ok {
+				retErr = err
+			}
+		}
+	}()
+
 	endTime := time.Now().Add(timeout)
-	tunnelName := wg.GetTunnelName()
+
+	logTimeout := time.Second * 5
+	nexTimeToLog := time.Now().Add(logTimeout)
 
 	client, err := wgctrl.New()
 	if err != nil {
@@ -39,9 +63,13 @@ func (wg *WireGuard) WaitForFirstHanshake(timeout time.Duration) error {
 	}
 
 	for {
+		if isStop != nil && *isStop {
+			return nil // disconnect requested
+		}
+
 		dev, err := client.Device(tunnelName)
 		if err != nil {
-			return fmt.Errorf("failed to check handshake info: %w", err)
+			return fmt.Errorf("failed to check handshake info for '%s': %w", tunnelName, err)
 		}
 
 		for _, peer := range dev.Peers {
@@ -50,9 +78,25 @@ func (wg *WireGuard) WaitForFirstHanshake(timeout time.Duration) error {
 			}
 		}
 
-		if time.Now().After(endTime) {
-			return fmt.Errorf("WireGuard handshake timeout")
+		if timeout > 0 {
+			if time.Now().After(endTime) {
+				return WgHandshakeTimeoutError{}
+			}
 		}
+
+		// logging
+		if logFunc != nil {
+			if time.Now().After(nexTimeToLog) {
+				logTimeout = logTimeout * 2
+				if logTimeout > time.Second*60 {
+					logTimeout = time.Second * 60
+				}
+				logFunc("Waiting for handshake ...")
+				nexTimeToLog = time.Now().Add(logTimeout)
+			}
+		}
+
+		// sleep before next check
 		time.Sleep(time.Millisecond * 10)
 	}
 }
