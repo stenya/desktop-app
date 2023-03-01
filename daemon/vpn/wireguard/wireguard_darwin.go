@@ -165,7 +165,9 @@ func (wg *WireGuard) internalConnect(stateChan chan<- vpn.StateInfo) error {
 		isWaitingToStart := true
 		for outPipeScanner.Scan() && wg.internals.command.ProcessState == nil {
 			text := outPipeScanner.Text()
-			logWgOut.Info(text) // logging the output
+			if !wg.isTestConnection {
+				logWgOut.Info(text) // logging the output
+			}
 
 			if isWaitingToStart && strings.Contains(text, strTriggerSuccessInit) {
 				isWaitingToStart = false
@@ -304,23 +306,27 @@ func (wg *WireGuard) resetManualDNS() error {
 }
 
 func (wg *WireGuard) initialize() error {
-	// Init IPv6 DNS resolver (if necessary);
-	// It should be done before initialization of the tunnel interface
-	if err := wg.initIPv6DNSResolver(); err != nil {
-		log.Error(fmt.Errorf("failed to initialize IPv6 DNS resolver: %w", err))
+	if !wg.isTestConnection {
+		// Init IPv6 DNS resolver (if necessary);
+		// It should be done before initialization of the tunnel interface
+		if err := wg.initIPv6DNSResolver(); err != nil {
+			log.Error(fmt.Errorf("failed to initialize IPv6 DNS resolver: %w", err))
+		}
 	}
 
 	if err := wg.initializeConfiguration(); err != nil {
 		return fmt.Errorf("failed to initialize configuration: %w", err)
 	}
 
-	if err := wg.setRoutes(); err != nil {
-		return fmt.Errorf("failed to set routes: %w", err)
-	}
+	if !wg.isTestConnection {
+		if err := wg.setRoutes(); err != nil {
+			return fmt.Errorf("failed to set routes: %w", err)
+		}
 
-	err := wg.setDNS()
-	if err != nil {
-		return fmt.Errorf("failed to set DNS: %w", err)
+		err := wg.setDNS()
+		if err != nil {
+			return fmt.Errorf("failed to set DNS: %w", err)
+		}
 	}
 	return nil
 }
@@ -414,6 +420,10 @@ func (wg *WireGuard) setWgConfiguration() error {
 }
 
 func (wg *WireGuard) setRoutes() error {
+	if wg.isTestConnection {
+		return fmt.Errorf("not allowed operation: this is a test connection")
+	}
+
 	log.Info("Modifying routing table...")
 
 	if net.IPv4(127, 0, 0, 1).Equal(wg.connectParams.hostIP) {
@@ -458,6 +468,10 @@ func (wg *WireGuard) setRoutes() error {
 }
 
 func (wg *WireGuard) removeRoutes() error {
+	if wg.isTestConnection {
+		return fmt.Errorf("not allowed operation: this is a test connection")
+	}
+
 	log.Info("Restoring routing table...")
 
 	shell.Exec(log, "/sbin/route", "-n", "delete", "-inet", "-net", "0/1", wg.connectParams.hostLocalIP.String())
@@ -476,6 +490,10 @@ func (wg *WireGuard) removeRoutes() error {
 }
 
 func (wg *WireGuard) onRoutingChanged() error {
+	if wg.isTestConnection {
+		return fmt.Errorf("not allowed operation: this is a test connection")
+	}
+
 	defGatewayIP, err := netinfo.DefaultGatewayIP()
 	if err != nil {
 		log.Warning(fmt.Sprintf("onRoutingChanged: %v", err))
@@ -493,6 +511,10 @@ func (wg *WireGuard) onRoutingChanged() error {
 }
 
 func (wg *WireGuard) setDNS() error {
+	if wg.isTestConnection {
+		return fmt.Errorf("not allowed operation: this is a test connection")
+	}
+
 	defaultDNS := wg.DefaultDNS()
 	log.Info("Updating DNS server to " + defaultDNS.String() + "...")
 	err := shell.Exec(log, platform.DNSScript(), "-up_set_dns", defaultDNS.String())
@@ -503,6 +525,10 @@ func (wg *WireGuard) setDNS() error {
 }
 
 func (wg *WireGuard) initIPv6DNSResolver() error {
+	if wg.isTestConnection {
+		return fmt.Errorf("not allowed operation: this is a test connection")
+	}
+
 	// required to be able to resolve IPv6 DNS addresses by the default macOS's domain name resolver
 	ipv6LocalIP := wg.connectParams.GetIPv6ClientLocalIP()
 	if ipv6LocalIP != nil && len(wg.getTunnelName()) > 0 {
@@ -515,6 +541,10 @@ func (wg *WireGuard) initIPv6DNSResolver() error {
 }
 
 func (wg *WireGuard) removeDNS() error {
+	if wg.isTestConnection {
+		return fmt.Errorf("not allowed operation: this is a test connection")
+	}
+
 	log.Info("Restoring DNS server.")
 	err := shell.Exec(log, platform.DNSScript(), "-down", wg.DefaultDNS().String())
 	if err != nil {
@@ -546,6 +576,9 @@ func getFreeTunInterfaceName() (string, error) {
 }
 
 func (wg *WireGuard) getOSSpecificConfigParams() (interfaceCfg []string, peerCfg []string) {
+	if wg.isTestConnection {
+		return
+	}
 
 	// TODO: check if we need it for this platform
 	// Same as "0.0.0.0/0" but such type of configuration is disabling internal WireGuard-s Firewall
