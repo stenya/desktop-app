@@ -109,6 +109,10 @@ type WireGuard struct {
 
 	// Must be implemented (AND USED) in correspond file for concrete platform. Must contain platform-specified properties (or can be empty struct)
 	internals internalVariables
+
+	// When isTestConnection==true - WG object will avoid updating routes, DNS settings,
+	// and any other configuration which may affect network connectivity on a host device.
+	isTestConnection bool
 }
 
 // NewWireGuardObject creates new wireguard structure
@@ -122,6 +126,10 @@ func NewWireGuardObject(wgBinaryPath string, wgToolBinaryPath string, wgConfigFi
 		toolBinaryPath: wgToolBinaryPath,
 		configFilePath: wgConfigFilePath,
 		connectParams:  connectionParams}, nil
+}
+
+func (wg *WireGuard) MarkAsTestConnection() {
+	wg.isTestConnection = true
 }
 
 func (wg *WireGuard) GetTunnelName() string {
@@ -205,16 +213,25 @@ func (wg *WireGuard) Pause() error {
 
 // Resume doing required operation for Resume (restores DNS configuration before Pause)
 func (wg *WireGuard) Resume() error {
+	if wg.isTestConnection {
+		return fmt.Errorf("not allowed operation: this is a test connection")
+	}
 	return wg.resume()
 }
 
 // SetManualDNS changes DNS to manual IP
 func (wg *WireGuard) SetManualDNS(dnsCfg dns.DnsSettings) error {
+	if wg.isTestConnection {
+		return fmt.Errorf("not allowed operation: this is a test connection")
+	}
 	return wg.setManualDNS(dnsCfg)
 }
 
 // ResetManualDNS restores DNS
 func (wg *WireGuard) ResetManualDNS() error {
+	if wg.isTestConnection {
+		return fmt.Errorf("not allowed operation: this is a test connection")
+	}
 	return wg.resetManualDNS()
 }
 
@@ -278,17 +295,19 @@ func (wg *WireGuard) generateConfig() ([]string, error) {
 func (wg *WireGuard) waitHandshakeAndNotifyConnected(stateChan chan<- vpn.StateInfo) error {
 	log.Info("Initialised")
 
-	// Check connectivity: wait for first handshake
-	// No timeout defined; function returns only when handshake received or wg.isDisconnectRequested == true
-	err := WaitForWireguardFirstHanshake(wg.GetTunnelName(), 0, &wg.isDisconnectRequested, func(mes string) { log.Info(mes) })
-	if err != nil {
-		if errors.Is(err, WgHandshakeTimeoutError{}) {
-			return err
+	if !wg.isTestConnection {
+		// Check connectivity: wait for first handshake
+		// No timeout defined; function returns only when handshake received or wg.isDisconnectRequested == true
+		err := WaitForWireguardFirstHanshake(wg.GetTunnelName(), 0, &wg.isDisconnectRequested, func(mes string) { log.Info(mes) })
+		if err != nil {
+			if errors.Is(err, WgHandshakeTimeoutError{}) {
+				return err
+			} else {
+				log.Error(err) // not handshake timeout. Probably internal issue with 'wgctrl'. Just print error in log
+			}
 		} else {
-			log.Error(err) // not handshake timeout. Probably internal issue with 'wgctrl'. Just print error in log
+			log.Info("Connected") // no errors - handshake received
 		}
-	} else {
-		log.Info("Connected") // no errors - handshake received
 	}
 
 	wg.notifyConnectedStat(stateChan)
@@ -315,6 +334,9 @@ func (wg *WireGuard) notifyConnectedStat(stateChan chan<- vpn.StateInfo) {
 }
 
 func (wg *WireGuard) OnRoutingChanged() error {
+	if wg.isTestConnection {
+		return fmt.Errorf("not allowed operation: this is a test connection")
+	}
 	return wg.onRoutingChanged()
 }
 

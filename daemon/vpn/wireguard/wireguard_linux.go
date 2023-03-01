@@ -116,23 +116,25 @@ func (wg *WireGuard) connect(stateChan chan<- vpn.StateInfo) error {
 		}
 
 		err = func() error {
-			// do not forget to restore DNS
-			defer func() {
-				// restore DNS configuration
-				if err := dns.DeleteManual(nil, wg.connectParams.clientLocalIP); err != nil {
-					log.Warning(fmt.Sprintf("failed to restore DNS configuration: %s", err))
-				}
-			}()
-			// update DNS configuration
+			if !wg.isTestConnection {
+				// do not forget to restore DNS
+				defer func() {
+					// restore DNS configuration
+					if err := dns.DeleteManual(nil, wg.connectParams.clientLocalIP); err != nil {
+						log.Warning(fmt.Sprintf("failed to restore DNS configuration: %s", err))
+					}
+				}()
+				// update DNS configuration
 
-			if !wg.internals.manualDNS.IsEmpty() {
-				if err := dns.SetManual(wg.internals.manualDNS, wg.connectParams.clientLocalIP); err != nil {
-					return fmt.Errorf("failed to set manual DNS: %w", err)
-				}
-			} else {
-				dnsIP := dns.DnsSettingsCreate(wg.DefaultDNS())
-				if err := dns.SetDefault(dnsIP, wg.connectParams.clientLocalIP); err != nil {
-					return fmt.Errorf("failed to set DNS: %w", err)
+				if !wg.internals.manualDNS.IsEmpty() {
+					if err := dns.SetManual(wg.internals.manualDNS, wg.connectParams.clientLocalIP); err != nil {
+						return fmt.Errorf("failed to set manual DNS: %w", err)
+					}
+				} else {
+					dnsIP := dns.DnsSettingsCreate(wg.DefaultDNS())
+					if err := dns.SetDefault(dnsIP, wg.connectParams.clientLocalIP); err != nil {
+						return fmt.Errorf("failed to set DNS: %w", err)
+					}
 				}
 			}
 
@@ -252,16 +254,24 @@ func (wg *WireGuard) resetManualDNS() error {
 func (wg *WireGuard) getOSSpecificConfigParams() (interfaceCfg []string, peerCfg []string) {
 	ipv6LocalIP := wg.connectParams.GetIPv6ClientLocalIP()
 	ipv6LocalIPStr := ""
-	allowedIPsV6 := ""
 	if ipv6LocalIP != nil {
 		ipv6LocalIPStr = ", " + ipv6LocalIP.String()
+	}
+	interfaceCfg = append(interfaceCfg, "Address = "+wg.connectParams.clientLocalIP.String()+"/32"+ipv6LocalIPStr)
+
+	if wg.isTestConnection {
+		return
+	}
+
+	allowedIPsV6 := ""
+	if ipv6LocalIP != nil {
 		allowedIPsV6 = ", ::/0"
 	}
 
 	if wg.connectParams.mtu > 0 {
 		interfaceCfg = append(interfaceCfg, fmt.Sprintf("MTU = %d", wg.connectParams.mtu))
 	}
-	interfaceCfg = append(interfaceCfg, "Address = "+wg.connectParams.clientLocalIP.String()+"/32"+ipv6LocalIPStr)
+
 	interfaceCfg = append(interfaceCfg, "SaveConfig = true")
 
 	peerCfg = append(peerCfg, "AllowedIPs = 0.0.0.0/0"+allowedIPsV6)

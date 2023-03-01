@@ -97,6 +97,6 @@ func WaitForWireguardFirstHanshake(tunnelName string, timeout time.Duration, isS
 		}
 
 		// sleep before next check
-		time.Sleep(time.Millisecond * 10)
+		time.Sleep(time.Millisecond * 20)
 	}
 }
