@@ -23,6 +23,7 @@
 package wireguard
 
 import (
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"net"
@@ -102,10 +103,16 @@ type WireGuard struct {
 	configFilePath string
 	connectParams  ConnectionParams
 	localPort      int
-	isDisconnected bool
+
+	isDisconnected        bool
+	isDisconnectRequested bool
 
 	// Must be implemented (AND USED) in correspond file for concrete platform. Must contain platform-specified properties (or can be empty struct)
 	internals internalVariables
+
+	// When isTestConnection==true - WG object will avoid updating routes, DNS settings,
+	// and any other configuration which may affect network connectivity on a host device.
+	isTestConnection bool
 }
 
 // NewWireGuardObject creates new wireguard structure
@@ -119,6 +126,14 @@ func NewWireGuardObject(wgBinaryPath string, wgToolBinaryPath string, wgConfigFi
 		toolBinaryPath: wgToolBinaryPath,
 		configFilePath: wgConfigFilePath,
 		connectParams:  connectionParams}, nil
+}
+
+func (wg *WireGuard) MarkAsTestConnection() {
+	wg.isTestConnection = true
+}
+
+func (wg *WireGuard) GetTunnelName() string {
+	return wg.getTunnelName()
 }
 
 // DestinationIP -  Get destination IP (VPN host server or proxy server IP address)
@@ -150,6 +165,7 @@ func (wg *WireGuard) Connect(stateChan chan<- vpn.StateInfo) error {
 
 	disconnectDescription := ""
 	wg.isDisconnected = false
+	wg.isDisconnectRequested = false
 	stateChan <- vpn.NewStateInfo(vpn.CONNECTING, "")
 	defer func() {
 		wg.isDisconnected = true
@@ -178,6 +194,7 @@ func (wg *WireGuard) Connect(stateChan chan<- vpn.StateInfo) error {
 
 // Disconnect stops the connection
 func (wg *WireGuard) Disconnect() error {
+	wg.isDisconnectRequested = true
 	return wg.disconnect()
 }
 
@@ -196,16 +213,25 @@ func (wg *WireGuard) Pause() error {
 
 // Resume doing required operation for Resume (restores DNS configuration before Pause)
 func (wg *WireGuard) Resume() error {
+	if wg.isTestConnection {
+		return fmt.Errorf("not allowed operation: this is a test connection")
+	}
 	return wg.resume()
 }
 
 // SetManualDNS changes DNS to manual IP
 func (wg *WireGuard) SetManualDNS(dnsCfg dns.DnsSettings) error {
+	if wg.isTestConnection {
+		return fmt.Errorf("not allowed operation: this is a test connection")
+	}
 	return wg.setManualDNS(dnsCfg)
 }
 
 // ResetManualDNS restores DNS
 func (wg *WireGuard) ResetManualDNS() error {
+	if wg.isTestConnection {
+		return fmt.Errorf("not allowed operation: this is a test connection")
+	}
 	return wg.resetManualDNS()
 }
 
@@ -266,6 +292,28 @@ func (wg *WireGuard) generateConfig() ([]string, error) {
 	return append(interfaceCfg, peerCfg...), nil
 }
 
+func (wg *WireGuard) waitHandshakeAndNotifyConnected(stateChan chan<- vpn.StateInfo) error {
+	log.Info("Initialised")
+
+	if !wg.isTestConnection {
+		// Check connectivity: wait for first handshake
+		// No timeout defined; function returns only when handshake received or wg.isDisconnectRequested == true
+		err := WaitForWireguardFirstHanshake(wg.GetTunnelName(), 0, &wg.isDisconnectRequested, func(mes string) { log.Info(mes) })
+		if err != nil {
+			if errors.Is(err, WgHandshakeTimeoutError{}) {
+				return err
+			} else {
+				log.Error(err) // not handshake timeout. Probably internal issue with 'wgctrl'. Just print error in log
+			}
+		} else {
+			log.Info("Connected") // no errors - handshake received
+		}
+	}
+
+	wg.notifyConnectedStat(stateChan)
+	return nil
+}
+
 func (wg *WireGuard) notifyConnectedStat(stateChan chan<- vpn.StateInfo) {
 	const isTCP = false
 	const isCanPause = true
@@ -286,6 +334,9 @@ func (wg *WireGuard) notifyConnectedStat(stateChan chan<- vpn.StateInfo) {
 }
 
 func (wg *WireGuard) OnRoutingChanged() error {
+	if wg.isTestConnection {
+		return fmt.Errorf("not allowed operation: this is a test connection")
+	}
 	return wg.onRoutingChanged()
 }
 

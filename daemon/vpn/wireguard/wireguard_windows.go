@@ -83,6 +83,10 @@ func (wg *WireGuard) init() error {
 	return wg.uninstallService()
 }
 
+func (wg *WireGuard) getTunnelName() string {
+	return strings.TrimSuffix(filepath.Base(wg.configFilePath), filepath.Ext(wg.configFilePath)) // IVPN
+}
+
 // connect - SYNCHRONOUSLY execute openvpn process (wait until it finished)
 func (wg *WireGuard) connect(stateChan chan<- vpn.StateInfo) error {
 	if wg.internals.isDisconnectRequested {
@@ -118,7 +122,7 @@ func (wg *WireGuard) connect(stateChan chan<- vpn.StateInfo) error {
 		if wg.connectParams.mtu > 0 {
 			return fmt.Errorf("failed to install windows service: %w\nThe 'Custom MTU' option may be set incorrectly, either revert to the default or try another value e.g. 1420.", err)
 		}
-		return fmt.Errorf("failed to install windows service: %w", err)
+		return err
 	}
 
 	// CONNECTED
@@ -291,15 +295,22 @@ func (wg *WireGuard) resetManualDNS() error {
 	return nil
 }
 
-func (wg *WireGuard) getTunnelName() string {
-	return strings.TrimSuffix(filepath.Base(wg.configFilePath), filepath.Ext(wg.configFilePath)) // IVPN
-}
-
 func (wg *WireGuard) getServiceName() string {
 	return "WireGuardTunnel$" + wg.getTunnelName() // WireGuardTunnel$IVPN
 }
 
 func (wg *WireGuard) getOSSpecificConfigParams() (interfaceCfg []string, peerCfg []string) {
+	ipv6LocalIP := wg.connectParams.GetIPv6ClientLocalIP()
+	ipv6LocalIPStr := ""
+	if ipv6LocalIP != nil {
+		ipv6LocalIPStr = ", " + ipv6LocalIP.String()
+	}
+	interfaceCfg = append(interfaceCfg, "Address = "+wg.connectParams.clientLocalIP.String()+ipv6LocalIPStr)
+
+	if wg.isTestConnection {
+		return
+	}
+
 	manualDNS := wg.internals.manualDNSRequired
 	if !manualDNS.IsEmpty() {
 		if manualDNS.Encryption == dns.EncryptionNone {
@@ -315,11 +326,8 @@ func (wg *WireGuard) getOSSpecificConfigParams() (interfaceCfg []string, peerCfg
 		interfaceCfg = append(interfaceCfg, fmt.Sprintf("MTU = %d", wg.connectParams.mtu))
 	}
 
-	ipv6LocalIP := wg.connectParams.GetIPv6ClientLocalIP()
-	ipv6LocalIPStr := ""
 	allowedIPsV6 := ""
 	if ipv6LocalIP != nil {
-		ipv6LocalIPStr = ", " + ipv6LocalIP.String()
 		// "8000::/1, ::/1" is the same as "::/0" but such type of configuration is disabling internal WireGuard-s Firewall
 		// (which blocks everything except WireGuard traffic)
 		// We need to disable WireGuard-s firewall because we have our own implementation of firewall.
@@ -327,8 +335,6 @@ func (wg *WireGuard) getOSSpecificConfigParams() (interfaceCfg []string, peerCfg
 		//  For details, refer to WireGuard-windows sources: https://git.zx2c4.com/wireguard-windows/tree/tunnel/addressconfig.go (enableFirewall(...) method)
 		allowedIPsV6 = ", 8000::/1, ::/1"
 	}
-
-	interfaceCfg = append(interfaceCfg, "Address = "+wg.connectParams.clientLocalIP.String()+ipv6LocalIPStr)
 
 	// "128.0.0.0/1, 0.0.0.0/1" is the same as "0.0.0.0/0" but such type of configuration is disabling internal WireGuard-s Firewall
 	// (which blocks everything except WireGuard traffic)
@@ -481,11 +487,13 @@ func (wg *WireGuard) installService(stateChan chan<- vpn.StateInfo) error {
 		}
 	}
 
-	// CONNECTED
-	log.Info("Connection started")
-	// Send 'connected' notification only after 'dns' package informed about correct DNS value
-	wg.notifyConnectedStat(stateChan)
+	// Initialised
 
+	// Wait for hanshake and send 'connected' notification only after 'dns' package informed about correct DNS value
+	err = wg.waitHandshakeAndNotifyConnected(stateChan)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
