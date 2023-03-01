@@ -64,7 +64,7 @@ func WaitForWireguardFirstHanshake(tunnelName string, timeout time.Duration, isS
 
 	for {
 		if isStop != nil && *isStop {
-			return nil // disconnect requested
+			return WgHandshakeTimeoutError{} // disconnect requested
 		}
 
 		dev, err := client.Device(tunnelName)
