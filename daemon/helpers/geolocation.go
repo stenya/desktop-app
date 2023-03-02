@@ -24,7 +24,7 @@ package helpers
 
 import "math"
 
-// GetDistanceFromLatLonInKm calc distance betwee two points
+// GetDistanceFromLatLonInKm calc distance between two points
 func GetDistanceFromLatLonInKm(lat1, lon1, lat2, lon2 float64) float64 {
 	var R = float64(6371)           // Radius of the earth in km
 	var dLat = deg2rad(lat2 - lat1) // deg2rad below

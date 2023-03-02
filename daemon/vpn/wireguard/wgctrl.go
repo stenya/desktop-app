@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"golang.zx2c4.com/wireguard/wgctrl"
+	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
 type WgHandshakeTimeoutError struct {
@@ -36,7 +37,47 @@ func (e WgHandshakeTimeoutError) Error() string {
 	return "WireGuard handshake timeout"
 }
 
-// WaitForFirstHanshake waits for a ahndshake during 'timeout' time.
+type WgDeviceNotFoundError struct {
+}
+
+func (e WgDeviceNotFoundError) Error() string {
+	return "WireGuard device not found"
+}
+
+// Device retrieves a WireGuard device by its interface name.
+//
+// Purpose:
+//
+//	It similar to original "wgctrl.Client.Device(name string)" function.
+//	But the original function has bug (in Windows implementation):
+//	it hangs forever when the device does not exist anymore.
+func GetCtrlDevice(devName string, client *wgctrl.Client) (retDev *wgtypes.Device, err error) {
+	if client == nil {
+		client, err = wgctrl.New()
+		if err != nil {
+			return nil, err
+		}
+		defer client.Close()
+	}
+
+	devs, err := client.Devices() // refresh devices
+	if err != nil {
+		return nil, err
+	}
+
+	for _, d := range devs {
+		if d.Name == devName {
+			retDev = d
+			break
+		}
+	}
+	if retDev == nil {
+		return nil, WgDeviceNotFoundError{}
+	}
+	return retDev, nil
+}
+
+// WaitForFirstHanshake waits for a handshake during 'timeout' time.
 // If no handshake occured - returns WgHandshakeTimeoutError
 // If timeout == 0 - function returns only when isStop changed to true
 func WaitForWireguardFirstHanshake(tunnelName string, timeout time.Duration, isStop *bool, logFunc func(string)) (retErr error) {
@@ -47,7 +88,7 @@ func WaitForWireguardFirstHanshake(tunnelName string, timeout time.Duration, isS
 	defer func() {
 		if r := recover(); r != nil {
 			if err, ok := r.(error); ok {
-				retErr = err
+				retErr = fmt.Errorf("crash (recovered): %w", err)
 			}
 		}
 	}()
@@ -61,13 +102,14 @@ func WaitForWireguardFirstHanshake(tunnelName string, timeout time.Duration, isS
 	if err != nil {
 		return fmt.Errorf("failed to check handshake info: %w", err)
 	}
+	defer client.Close()
 
 	for {
 		if isStop != nil && *isStop {
 			return WgHandshakeTimeoutError{} // disconnect requested
 		}
 
-		dev, err := client.Device(tunnelName)
+		dev, err := GetCtrlDevice(tunnelName, client)
 		if err != nil {
 			return fmt.Errorf("failed to check handshake info for '%s': %w", tunnelName, err)
 		}
