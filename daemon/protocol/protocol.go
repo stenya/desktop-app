@@ -139,6 +139,8 @@ type Service interface {
 	GetWiFiAvailableNetworks() []string
 
 	GetDiagnosticLogs() (logActive string, logPrevSession string, extraInfo string, err error)
+	ConnectionTestStart() error
+	ConnectionTestStop() error
 }
 
 // CreateProtocol - Create new protocol object
@@ -1094,6 +1096,20 @@ func (p *Protocol) processRequest(conn net.Conn, message string) {
 
 		// notify all clients about changed wifi settings
 		p.notifyClients(p.createHelloResponse())
+
+	case "ConnTest_Start":
+		if err := p._service.ConnectionTestStart(); err != nil {
+			p.sendErrorResponse(conn, reqCmd, err)
+			return
+		}
+		p.sendResponse(conn, &types.EmptyResp{}, reqCmd.Idx)
+
+	case "ConnTest_Stop":
+		if err := p._service.ConnectionTestStop(); err != nil {
+			p.sendErrorResponse(conn, reqCmd, err)
+			return
+		}
+		p.sendResponse(conn, &types.EmptyResp{}, reqCmd.Idx)
 
 	case "Disconnect":
 		p._disconnectRequested = true

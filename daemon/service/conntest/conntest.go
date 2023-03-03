@@ -25,74 +25,193 @@ package conntest
 import (
 	"fmt"
 	"net"
+	"sort"
 
 	api_types "github.com/ivpn/desktop-app/daemon/api/types"
+	"github.com/ivpn/desktop-app/daemon/helpers"
 	"github.com/ivpn/desktop-app/daemon/service/preferences"
 	service_types "github.com/ivpn/desktop-app/daemon/service/types"
+	"github.com/ivpn/desktop-app/daemon/vpn"
 )
 
 type ConnectivityTester struct {
-	servers         api_types.ServersInfoResponse
-	session         preferences.SessionStatus
-	connParams      service_types.ConnectionParams
-	isStopRequested bool
+	servers          api_types.ServersInfoResponse
+	session          preferences.SessionStatus
+	connParams       service_types.ConnectionParams
+	statusNotifyChan chan<- StatusEvent
+	isStopRequested  bool
 }
+
+type GoodConnectionInfo struct {
+	Gateway  string // Server gateway
+	HostName string // Host name (empty if all server hosts are OK)
+	Port     int    // Port number
+	PortType string // udp/tcp
+}
+
+type StatusEvent struct {
+	Server api_types.ServerInfoBase
+	Host   api_types.HostInfoBase
+	Port   api_types.PortInfo
+}
+
+/*
+func (ct *ConnectivityTester) IsRunning() bool {
+	ch := ct.stopNotifierChan
+	if ch == nil {
+		return false
+	}
+	var isRunning bool
+	select {
+	case _, isRunning = <-ch:
+	default:
+		isRunning = true
+	}
+	return isRunning
+}
+*/
 
 func (ct *ConnectivityTester) Stop() error {
 	ct.isStopRequested = true
 	return nil
 }
 
-func (ct ConnectivityTester) Test(servers api_types.ServersInfoResponse, session preferences.SessionStatus, connParams service_types.ConnectionParams) error {
+func (ct ConnectivityTester) Test(
+	servers api_types.ServersInfoResponse,
+	session preferences.SessionStatus,
+	connParams service_types.ConnectionParams,
+	statusNotifyChan chan<- StatusEvent) (*GoodConnectionInfo, error) {
+
 	ct.servers = servers
 	ct.session = session
-
-	if !ct.session.IsLoggedIn() {
-		return fmt.Errorf("account not initialised (please, login)")
-	}
-
-	wgLocalIP := net.ParseIP(ct.session.WGLocalIP)
-	if wgLocalIP == nil {
-		return fmt.Errorf("error updating WG connection preferences (failed parsing local IP for WG connection)")
-	}
+	ct.connParams = connParams
+	ct.statusNotifyChan = statusNotifyChan
 
 	var (
 		err error
 		wct *ConnectivityTesterWireguard
 	)
+
 	stopNotifierChan := make(chan struct{})
 	defer func() {
 		close(stopNotifierChan)
+		close(ct.statusNotifyChan)
 		if wct != nil {
 			wct.WaitForDisconnect()
 		}
 	}()
 
-	wct, err = InitTesterWireguard(stopNotifierChan, wgLocalIP, session.WGPrivateKey)
-	if err != nil {
-		return fmt.Errorf("failed to initialise WireGuard tester object: %w", err)
+	if !ct.session.IsLoggedIn() {
+		return nil, fmt.Errorf("account not initialised (please, login)")
 	}
 
-	for _, svr := range ct.servers.WireguardServers {
+	wgLocalIP := net.ParseIP(ct.session.WGLocalIP)
+	if wgLocalIP == nil {
+		return nil, fmt.Errorf("error updating WG connection preferences (failed parsing local IP for WG connection)")
+	}
+
+	wct, err = InitTesterWireguard(stopNotifierChan, wgLocalIP, session.WGPrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialise WireGuard tester object: %w", err)
+	}
+
+	svrs := ct.sortServersByDistance(ct.servers.WireguardServers)
+	ports := ct.sortPorts(ct.servers.Config.Ports.WireGuard)
+
+	for _, svr := range svrs {
 		for _, host := range svr.Hosts {
-			for _, port := range ct.servers.Config.Ports.WireGuard {
+			for _, port := range ports {
 				if port.Port == 0 {
 					continue
 				}
 				if ct.isStopRequested {
-					return nil
+					return nil, fmt.Errorf("cancelled")
 				}
-				err := wct.Test(host, port.Port)
 
-				msg := fmt.Sprintf("SVR: %s (%s) Host=%s\t(%s:%d)", svr.Country, svr.City, host.Hostname, host.Host, port.Port)
-				if err != nil {
-					fmt.Printf("*** ERROR    : %s, err=%v\n", msg, err)
-				} else {
-					fmt.Printf("*** Connected: %s\n", msg)
+				// notify current status
+				select {
+				case ct.statusNotifyChan <- StatusEvent{
+					Server: svr.ServerInfoBase,
+					Host:   host.HostInfoBase,
+					Port:   port}:
+				default: // channel is full
 				}
+
+				err := wct.Test(host, port.Port)
+				//*
+				if err == nil {
+					return &GoodConnectionInfo{
+						Gateway:  svr.Gateway,   // Server gateway
+						HostName: host.Hostname, // Host name (empty if all server hosts are OK)
+						Port:     port.Port,     // Port number
+						PortType: port.Type,     // udp/tcp
+					}, nil
+				}
+				//*/
+
+				/*
+					msg := fmt.Sprintf("SVR: %s (%s) Host=%s\t(%s:%d)", svr.Country, svr.City, host.Hostname, host.Host, port.Port)
+					if err != nil {
+						fmt.Printf("*** ERROR    : %s, err=%v\n", msg, err)
+					} else {
+						fmt.Printf("*** Connected: %s\n", msg)
+					} //*/
 			}
 		}
 	}
 
+	return nil, fmt.Errorf("no good connection parameters found")
+}
+
+func (ct ConnectivityTester) sortServersByDistance(svrs []api_types.WireGuardServerInfo) (ret []api_types.WireGuardServerInfo) {
+	ret = make([]api_types.WireGuardServerInfo, len(svrs))
+	copy(ret, svrs) // do not change original slice
+
+	if ct.connParams.CheckIsDefined() != nil {
+		return ret
+	}
+	if ct.connParams.VpnType != vpn.WireGuard {
+		return ret
+	}
+
+	baseSvr := ct.getServerByHostDnsName(ct.connParams.WireGuardParameters.EntryVpnServer.Hosts[0].DnsName)
+	if baseSvr == nil {
+		return ret
+	}
+
+	cLat := float64(baseSvr.Latitude)
+	cLot := float64(baseSvr.Longitude)
+	sort.Slice(ret, func(i, j int) bool {
+		di := helpers.GetDistanceFromLatLonInKm(cLat, cLot, float64(ret[i].Latitude), float64(ret[i].Longitude))
+		dj := helpers.GetDistanceFromLatLonInKm(cLat, cLot, float64(ret[j].Latitude), float64(ret[j].Longitude))
+		return di < dj
+	})
+	return ret
+}
+
+func (ct ConnectivityTester) getServerByHostDnsName(hostDnsName string) *api_types.ServerInfoBase {
+	for _, s := range ct.servers.WireguardServers {
+		for _, h := range s.Hosts {
+			if h.DnsName == hostDnsName {
+				return &s.ServerInfoBase
+			}
+		}
+	}
 	return nil
+}
+
+// sortPorts() returns ports slice in port tpiority way
+//
+//	E.g. The default port (selected by user) has highest priority and must be checked first
+func (ct ConnectivityTester) sortPorts(ports []api_types.PortInfo) (ret []api_types.PortInfo) {
+
+	defaultPort := api_types.PortInfo{Port: ct.connParams.WireGuardParameters.Port.Port, Type: "UDP"}
+	ret = append(ret, defaultPort)
+	for _, p := range ports {
+		if p.Port != 0 && !p.Equal(defaultPort) {
+			ret = append(ret, p)
+		}
+	}
+
+	return ret
 }

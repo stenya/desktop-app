@@ -27,6 +27,7 @@ import (
 	"time"
 
 	api_types "github.com/ivpn/desktop-app/daemon/api/types"
+	"github.com/ivpn/desktop-app/daemon/service/conntest"
 	"github.com/ivpn/desktop-app/daemon/service/preferences"
 	service_types "github.com/ivpn/desktop-app/daemon/service/types"
 	"github.com/ivpn/desktop-app/daemon/service/wgkeys"
@@ -84,4 +85,7 @@ type IServiceEventsReceiver interface {
 	IsClientConnected(checkOnlyUiClients bool) bool
 	// IsCanDoBackgroundAction returns 'false' when no background action allowed (e.g. EAA enabled but no authenticated clients connected)
 	IsCanDoBackgroundAction() bool
+
+	OnConnectionTestStatus(conntest.StatusEvent)
+	OnConnectionTestResult(error, conntest.GoodConnectionInfo)
 }

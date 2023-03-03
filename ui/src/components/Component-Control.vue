@@ -210,6 +210,32 @@ export default {
   methods: {
     async switchChecked(isConnect) {
       connect(this, isConnect);
+      if (isConnect) {
+        if (this.$store.state.settings.vpnType === VpnTypeEnum.WireGuard) {
+          setTimeout(async () => {
+            if (
+              this.$store.state.vpnState.connectionState ===
+              VpnStateEnum.CONNECTING
+            ) {
+              let ret = await sender.showMessageBoxSync(
+                {
+                  type: "question",
+                  message: `Do you want to start connectivity test?`,
+                  detail:
+                    "Looks like there is a problem with the accessibility to the server you selected. Do you want to run a connectivity test to determine workable connection parameters?",
+                  buttons: ["Start", "Cancel"],
+                },
+                true
+              );
+              if (ret == 1) {
+                // cancel
+                return;
+              }
+              sender.ConnectionTest_Start();
+            }
+          }, 5000);
+        }
+      }
     },
     async onPauseResume(seconds) {
       if (seconds == null || seconds == 0) {

@@ -25,6 +25,7 @@ package protocol
 import (
 	api_types "github.com/ivpn/desktop-app/daemon/api/types"
 	"github.com/ivpn/desktop-app/daemon/protocol/types"
+	"github.com/ivpn/desktop-app/daemon/service/conntest"
 	"github.com/ivpn/desktop-app/daemon/service/preferences"
 )
 
@@ -98,4 +99,15 @@ func (p *Protocol) OnSplitTunnelStatusChanged() {
 		return
 	}
 	p.notifyClients(&status)
+}
+
+func (p *Protocol) OnConnectionTestStatus(stat conntest.StatusEvent) {
+	p.notifyClients(&types.ConnTest_RespStatus{Status: stat})
+}
+func (p *Protocol) OnConnectionTestResult(err error, result conntest.GoodConnectionInfo) {
+	errStr := ""
+	if err != nil {
+		errStr = err.Error()
+	}
+	p.notifyClients(&types.ConnTest_RespResult{Error: errStr, GoodConnection: result})
 }

@@ -25,6 +25,7 @@ export default {
 
   state: {
     isParanoidModePasswordView: false,
+    isConnectionTestView: false,
 
     // favorite servers view selected
     serversFavoriteView: false,
@@ -51,6 +52,9 @@ export default {
     isParanoidModePasswordView(state, value) {
       state.isParanoidModePasswordView = value;
     },
+    isConnectionTestView(state, value) {
+      state.isConnectionTestView = value;
+    },
     serversFavoriteView(state, value) {
       state.serversFavoriteView = value;
     },
@@ -72,6 +76,9 @@ export default {
   actions: {
     isParanoidModePasswordView(context, value) {
       context.commit("isParanoidModePasswordView", value);
+    },
+    isConnectionTestView(context, value) {
+      context.commit("isConnectionTestView", value);
     },
     serversFavoriteView(context, value) {
       context.commit("serversFavoriteView", value);

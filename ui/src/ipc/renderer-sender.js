@@ -405,4 +405,11 @@ export default {
       password
     );
   },
+
+  ConnectionTest_Start: async () => {
+    return await invoke("renderer-request-ConnectionTest_Start");
+  },
+  ConnectionTest_Stop: async () => {
+    return await invoke("renderer-request-ConnectionTest_Stop");
+  },
 };

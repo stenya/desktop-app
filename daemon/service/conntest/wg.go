@@ -202,5 +202,5 @@ func (wct ConnectivityTesterWireguard) Test(host api_types.WireGuardServerHostIn
 		isDisconnectRequested = true
 	}()
 
-	return wireguard.WaitForWireguardFirstHanshake(devName, time.Millisecond*400, &isDisconnectRequested, nil)
+	return wireguard.WaitForWireguardFirstHanshake(devName, time.Millisecond*200, &isDisconnectRequested, nil)
 }

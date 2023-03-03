@@ -114,6 +114,40 @@ export default {
     // Pings info: hostsPings[host] = latency
     hostsPings: {},
 
+    connectionTestRunning: false,
+    connectionTestRunningState: null /*{
+      Server: {
+        gateway: "",
+        country_code: "",
+        country: "",
+        city: "",
+        latitude: 0,
+        longitude: 0,
+        isp: "",
+      },
+      Host: {
+        hostname: "",
+        host: "",
+        dns_name: "",
+        multihop_port: 0,
+        load: 0.0,
+      },
+      Port: {
+        type: "UDP/TCP",
+        port: X,
+        range: { min: X, max: X }, // not applicable
+      },
+    }*/,
+    connectionTestResult: null /*{
+      Error: null,
+      GoodConnection: {
+        Gateway: "",  // Server gateway
+        HostName: "", // Host name (empty if all server hosts are OK)
+        Port: 0,      // Port number
+        PortType: ""  // udp/tcp
+      }
+    }*/,
+
     /*
     // SERVERS
     servers: {
@@ -234,6 +268,16 @@ export default {
     },
     availableWiFiNetworks(state, availableWiFiNetworks) {
       state.availableWiFiNetworks = availableWiFiNetworks;
+    },
+
+    connectionTestRunning(state, connectionTestRunning) {
+      state.connectionTestRunning = connectionTestRunning;
+    },
+    connectionTestRunningState(state, connectionTestRunningState) {
+      state.connectionTestRunningState = connectionTestRunningState;
+    },
+    connectionTestResult(state, connectionTestResult) {
+      state.connectionTestResult = connectionTestResult;
     },
   },
 

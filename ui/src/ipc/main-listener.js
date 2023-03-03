@@ -482,3 +482,10 @@ ipcMain.handle(
     return await client.SetLocalParanoidModePassword(password);
   }
 );
+
+ipcMain.handle("renderer-request-ConnectionTest_Start", async () => {
+  return await client.ConnectionTest_Start();
+});
+ipcMain.handle("renderer-request-ConnectionTest_Stop", async () => {
+  return await client.ConnectionTest_Stop();
+});

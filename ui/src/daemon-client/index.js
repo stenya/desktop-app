@@ -106,6 +106,9 @@ const daemonRequests = Object.freeze({
   WiFiCurrentNetwork: "WiFiCurrentNetwork",
 
   ParanoidModeSetPasswordReq: "ParanoidModeSetPasswordReq",
+
+  ConnTest_Start: "ConnTest_Start",
+  ConnTest_Stop: "ConnTest_Stop",
 });
 
 const daemonResponses = Object.freeze({
@@ -138,6 +141,9 @@ const daemonResponses = Object.freeze({
   WiFiCurrentNetworkResp: "WiFiCurrentNetworkResp",
 
   ServiceExitingResp: "ServiceExitingResp",
+
+  ConnTest_RespStatus: "ConnTest_RespStatus",
+  ConnTest_RespResult: "ConnTest_RespResult",
 });
 
 export const AppUpdateInfoType = Object.freeze({
@@ -520,6 +526,16 @@ async function processResponse(response) {
 
     case daemonResponses.ServiceExitingResp:
       if (_onDaemonExitingCallback) _onDaemonExitingCallback();
+      break;
+
+    case daemonResponses.ConnTest_RespStatus:
+      store.commit(`vpnState/connectionTestRunning`, true);
+      store.commit(`uiState/isConnectionTestView`, true);
+      store.commit(`vpnState/connectionTestRunningState`, obj.Status);
+      break;
+    case daemonResponses.ConnTest_RespResult:
+      store.commit(`vpnState/connectionTestResult`, obj);
+      store.commit(`vpnState/connectionTestRunning`, false);
       break;
 
     case daemonResponses.ErrorRespDelayed:
@@ -1891,6 +1907,25 @@ async function SetLocalParanoidModePassword(password) {
   store.commit("uiState/isParanoidModePasswordView", false);
 }
 
+async function ConnectionTest_Start() {
+  store.commit(`vpnState/connectionTestRunningState`, null);
+  store.commit(`vpnState/connectionTestResult`, null);
+  store.commit(`uiState/isConnectionTestView`, true);
+  try {
+    await sendRecv({
+      Command: daemonRequests.ConnTest_Start,
+    });
+  } catch (e) {
+    console.error(e);
+    store.commit(`uiState/isConnectionTestView`, false);
+  }
+}
+async function ConnectionTest_Stop() {
+  await sendRecv({
+    Command: daemonRequests.ConnTest_Stop,
+  });
+}
+
 export default {
   AppUpdateInfoType,
 
@@ -1945,4 +1980,7 @@ export default {
 
   SetParanoidModePassword,
   SetLocalParanoidModePassword,
+
+  ConnectionTest_Start,
+  ConnectionTest_Stop,
 };

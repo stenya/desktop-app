@@ -61,6 +61,7 @@ import Login from "@/components/Component-Login.vue";
 import Control from "@/components/Component-Control.vue";
 import TheMap from "@/components/Component-Map.vue";
 import ParanoidModePassword from "@/components/ParanoidModePassword.vue";
+import ConnTest from "@/components/Component-ConnectionTest.vue";
 
 export default {
   components: {
@@ -69,6 +70,7 @@ export default {
     Control,
     TheMap,
     ParanoidModePassword,
+    ConnTest,
   },
   data: function () {
     return {
@@ -93,6 +95,12 @@ export default {
       if (this.$store.state.uiState.isParanoidModePasswordView === true)
         return ParanoidModePassword;
       if (!this.isLoggedIn) return Login;
+
+      if (
+        this.$store.state.uiState.isConnectionTestView === true ||
+        this.$store.state.vpnState.connectionTestRunning === true
+      )
+        return ConnTest;
 
       return Control;
     },
