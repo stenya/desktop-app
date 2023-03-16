@@ -43,10 +43,13 @@ type ConnectivityTesterWireguard struct {
 	privateKeyParsed wgtypes.Key
 
 	// channel closes when exiting from synchronous 'Connect' function
-	connectionFinishedChan chan struct{}
+	disconnectedChan    chan struct{}
+	disconnectRequested bool
 }
 
-func InitTesterWireguard(onUninitialise chan struct{}, localIP net.IP, privateKey string) (*ConnectivityTesterWireguard, error) {
+// Initialise WireGuard interface for testing connection.
+// IMPORTANT! Do not forget to call 'Disconnect()' to uninitialize!
+func InitTesterWireguard(localIP net.IP, privateKey string) (*ConnectivityTesterWireguard, error) {
 	if localIP == nil || localIP.IsUnspecified() {
 		return nil, fmt.Errorf("wireguard local IP not specified")
 	}
@@ -57,31 +60,33 @@ func InitTesterWireguard(onUninitialise chan struct{}, localIP net.IP, privateKe
 	}
 
 	obj := &ConnectivityTesterWireguard{
-		localIP:                localIP,
-		privateKey:             privateKey,
-		privateKeyParsed:       privKey,
-		connectionFinishedChan: make(chan struct{})}
+		localIP:          localIP,
+		privateKey:       privateKey,
+		privateKeyParsed: privKey,
+		disconnectedChan: make(chan struct{})} // closed when WG device unitialised (Disconnected)
 
 	// init wireguard device
 	if err := obj.initWireguardDevice(); err != nil {
 		return nil, err
 	}
 
-	go func() {
-		<-onUninitialise
-		obj.wg.Disconnect()
-	}()
-
 	return obj, nil
 }
 
-func (wct *ConnectivityTesterWireguard) WaitForDisconnect() {
-	<-wct.connectionFinishedChan
+func (wct *ConnectivityTesterWireguard) Disconnect() {
+	wct.disconnectRequested = true
+	wgObj := wct.wg
+	if wgObj != nil {
+		// disconnect request
+		wgObj.Disconnect()
+		// wait for full un-initialisation
+		<-wct.disconnectedChan
+	}
 }
 
 func (wct *ConnectivityTesterWireguard) initWireguardDevice() error {
-	// basic initialisation parameters
-	// we do not care about real connectivity; we need only initiate WG device
+	// Basic initialisation parameters.
+	// We do not care about real connectivity; we need only initiate WG device.
 	wgConnParams := wireguard.CreateConnectionParams(
 		"",                       // miltihop exit host name
 		2049,                     // host port
@@ -96,7 +101,7 @@ func (wct *ConnectivityTesterWireguard) initWireguardDevice() error {
 	}
 	wgConnParams.SetCredentials(wct.privateKey, wct.localIP)
 
-	// Init WG interface and first connection
+	// Create WG object
 	wg, err := wireguard.NewWireGuardObject(platform.WgBinaryPath(),
 		platform.WgToolBinaryPath(),
 		platform.WGConfigFilePath(), wgConnParams)
@@ -105,9 +110,10 @@ func (wct *ConnectivityTesterWireguard) initWireguardDevice() error {
 	}
 	wct.wg = wg
 
-	// Mark connection as only for tests. It is important to not change any connectivity parameters on the device
+	// Mark connection as only for tests. It is important to not change any connectivity parameters in OS
 	wg.MarkAsTestConnection()
 
+	// Initialise WG object
 	if err := wg.Init(); err != nil {
 		return fmt.Errorf("failed to initialize VPN object: %w", err)
 	}
@@ -116,16 +122,16 @@ func (wct *ConnectivityTesterWireguard) initWireguardDevice() error {
 	onInitializedChan := make(chan error)
 
 	go func() {
+		// do not forget to mark that connection finished
+		defer close(wct.disconnectedChan)
+
 		// init 'status' channel and start reading it
 		stateChan := make(chan vpn.StateInfo)
-		defer func() {
-			close(wct.connectionFinishedChan)
-			//close(stateChan)
-		}()
+
 		go func() {
 			for {
 				select {
-				case _, more := <-wct.connectionFinishedChan:
+				case _, more := <-wct.disconnectedChan:
 					if !more {
 						return // channel is closed
 					}
@@ -147,6 +153,7 @@ func (wct *ConnectivityTesterWireguard) initWireguardDevice() error {
 		}
 	}()
 
+	// Wait for WG device initialises and will be ready for usage
 	if connErr := <-onInitializedChan; connErr != nil {
 		return connErr
 	}
@@ -155,6 +162,10 @@ func (wct *ConnectivityTesterWireguard) initWireguardDevice() error {
 }
 
 func (wct ConnectivityTesterWireguard) Test(host api_types.WireGuardServerHostInfo, port int) error {
+	if wct.wg == nil {
+		return fmt.Errorf("internal error: WG not initialised")
+	}
+
 	devName := wct.wg.GetTunnelName()
 
 	// Wireguard control client
@@ -196,11 +207,5 @@ func (wct ConnectivityTesterWireguard) Test(host api_types.WireGuardServerHostIn
 	if err != nil {
 		return err
 	}
-
-	var isDisconnectRequested bool
-	defer func() {
-		isDisconnectRequested = true
-	}()
-
-	return wireguard.WaitForWireguardFirstHanshake(devName, time.Millisecond*200, &isDisconnectRequested, nil)
+	return wireguard.WaitForWireguardFirstHanshake(devName, constTimeout, &wct.disconnectRequested, nil)
 }

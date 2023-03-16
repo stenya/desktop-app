@@ -40,31 +40,19 @@ import (
 	"github.com/ivpn/desktop-app/daemon/vpn"
 )
 
-type port struct {
-	port int
-	tcp  bool
-}
-
-func (p *port) IsTCP() int {
-	if p.tcp {
-		return 1
-	}
-	return 0
-}
-
-func (p *port) String() string {
+func PortToString(p service_types.PortData) string {
 	protoName := "UDP"
-	if p.tcp {
+	if p.Protocol == service_types.TCP {
 		protoName = "TCP"
 	}
-	if p.port != 0 {
-		return fmt.Sprintf("%s:%d", protoName, p.port)
+	if p.Port != 0 {
+		return fmt.Sprintf("%s:%d", protoName, p.Port)
 	}
 	return fmt.Sprintf("%s", protoName)
 }
 
-func defaultPort() *port {
-	return &port{port: 2049}
+func defaultPort() *service_types.PortData {
+	return &service_types.PortData{Port: 2049}
 }
 
 type CmdDisconnect struct {
@@ -469,9 +457,9 @@ func (c *CmdConnect) Run() (retError error) {
 							printAllowedPorts(allowedPortsWg, allowedPortsOvpn)
 							return err
 						}
-						req.Params.WireGuardParameters.Port.Port = p.port
+						req.Params.WireGuardParameters.Port = p
 
-						fmt.Printf("[WireGuard] Connecting to: %s, %s (%s) %s %s...\n", s.City, s.CountryCode, s.Country, s.Gateway, p.String())
+						fmt.Printf("[WireGuard] Connecting to: %s, %s (%s) %s %s...\n", s.City, s.CountryCode, s.Country, s.Gateway, PortToString(p))
 					} else {
 						if exitSvrWg == nil {
 							return fmt.Errorf("serverID not found in servers list (%s)", c.multihopExitSvr)
@@ -523,7 +511,7 @@ func (c *CmdConnect) Run() (retError error) {
 				}
 			}
 
-			var destPort port
+			var destPort service_types.PortData
 			// entry server
 			for i, s := range servers.OpenvpnServers {
 				if s.Gateway == c.gateway {
@@ -562,11 +550,10 @@ func (c *CmdConnect) Run() (retError error) {
 						// get Multi-Hop ID
 						req.Params.OpenVpnParameters.MultihopExitServer.ExitSrvID = strings.Split(c.multihopExitSvr, ".")[0]
 						req.Params.OpenVpnParameters.MultihopExitServer.Hosts = funcApplyCustomHost(exitSvrOvpn.Hosts, customHostExitServer)
-						destPort.port = 0 // do not use port number (port-based multihop)
+						destPort.Port = 0 // do not use port number (port-based multihop)
 					}
 
-					req.Params.OpenVpnParameters.Port.Port = destPort.port
-					req.Params.OpenVpnParameters.Port.Protocol = destPort.IsTCP()
+					req.Params.OpenVpnParameters.Port = destPort
 
 					break
 				}
@@ -579,21 +566,21 @@ func (c *CmdConnect) Run() (retError error) {
 				return fmt.Errorf("serverID not found in servers list (%s)", c.multihopExitSvr)
 			}
 
-			portStrInfo := destPort.String()
+			portStrInfo := PortToString(destPort)
 			if obfsproxyCfg.IsObfsproxy() {
 				if len(c.port) > 0 {
 					// if user manually defined port for obfsproxy connection - inform that it is ignored
 					fmt.Printf("Note: port definition is ignored for the connections when the obfsproxy enabled\n")
 				}
 				portStrInfo = "TCP"
-				destPort.tcp = true
+				destPort.Protocol = service_types.TCP
 			}
 
 			if len(c.multihopExitSvr) == 0 {
 				fmt.Printf("[OpenVPN] Connecting to: %s, %s (%s) %s %s...\n", entrySvrOvpn.City, entrySvrOvpn.CountryCode, entrySvrOvpn.Country, entrySvrOvpn.Gateway, portStrInfo)
 			} else {
 				portStrInfo = "UDP"
-				if destPort.tcp {
+				if destPort.Protocol == service_types.TCP {
 					portStrInfo = "TCP"
 				}
 
@@ -660,29 +647,31 @@ func (c *CmdConnect) Run() (retError error) {
 	return nil
 }
 
-func getPort(portInfo string, allowedPorts []apitypes.PortInfo) (port, error) {
+func getPort(portInfo string, allowedPorts []apitypes.PortInfo) (service_types.PortData, error) {
 	var err error
 	var portPtr *int
 	var isTCPPtr *bool
 	if len(portInfo) > 0 {
 		portPtr, isTCPPtr, err = parsePort(portInfo)
 		if err != nil {
-			return port{}, err
+			return service_types.PortData{}, err
 		}
 	}
 
 	retPort := *defaultPort() // default port
 
 	if portPtr != nil {
-		retPort.port = *portPtr
+		retPort.Port = *portPtr
 	}
 	if isTCPPtr != nil {
-		retPort.tcp = *isTCPPtr
+		if *isTCPPtr == true {
+			retPort.Protocol = service_types.TCP
+		}
 	}
 
 	if len(allowedPorts) > 0 {
 		if isPortAllowed(allowedPorts[:], retPort) == false {
-			return port{}, fmt.Errorf(fmt.Sprintf("not allowed port '%s'", retPort.String()))
+			return service_types.PortData{}, fmt.Errorf(fmt.Sprintf("not allowed port '%s'", PortToString(retPort)))
 		}
 	}
 
@@ -699,12 +688,12 @@ func printAllowedPorts(allowedPortsWg, allowedOvpnPorts []apitypes.PortInfo) {
 	}
 }
 
-func isPortAllowed(ports []apitypes.PortInfo, thePort port) bool {
+func isPortAllowed(ports []apitypes.PortInfo, thePort service_types.PortData) bool {
 	for _, p := range ports {
-		if p.Port != 0 && p.Port == thePort.port && p.IsTCP() == thePort.tcp {
+		if p.Port != 0 && p.Port == thePort.Port && (p.IsTCP() == (thePort.Protocol == service_types.TCP)) {
 			return true
 		}
-		if p.Range.Min > 0 && thePort.port >= p.Range.Min && thePort.port <= p.Range.Max {
+		if p.Range.Min > 0 && thePort.Port >= p.Range.Min && thePort.Port <= p.Range.Max {
 			return true
 		}
 	}

@@ -294,6 +294,18 @@ func (s *Service) init() error {
 	// Start processing power events in separate routine (Windows)
 	s.startProcessingPowerEvents()
 
+	// TODO: DEMLME
+	/*
+		svrs, _ := s.ServersList()
+		cTester, err := conntest.CreateConnectivityTester(*svrs, s.Preferences().LastConnectionParams, s.Preferences().Session)
+		if err != nil {
+			log.Error(err)
+			return err
+		}
+		cTester.TestPorts(nil, nil)
+		//*/
+	//s.ConnectionTestStart()
+
 	return nil
 }
 
@@ -750,6 +762,10 @@ func (s *Service) SetPreference(key protocolTypes.ServicePreference, val string)
 	switch key {
 	case protocolTypes.Prefs_IsEnableLogging:
 		if val, err := strconv.ParseBool(val); err == nil {
+			// TODO: this is a test
+			if val == false {
+				break
+			}
 			isChanged = val != prefs.IsLogging
 			prefs.IsLogging = val
 			logger.Enable(val)

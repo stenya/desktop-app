@@ -50,10 +50,15 @@ func (s *Service) ConnectionTestStart() error {
 		return err
 	}
 
+	svrs, _ := s.ServersList()
+	cTester, err := conntest.CreateConnectivityTester(*svrs, s.Preferences().LastConnectionParams, s.Preferences().Session)
+	if err != nil {
+		log.Error(err)
+		return err
+	}
+
 	// the function is asynchronous
 	go func() {
-		svrs, _ := s.ServersList()
-		cTester := conntest.ConnectivityTester{}
 		statusNotifyChan := make(chan conntest.StatusEvent)
 
 		go func() {
@@ -74,7 +79,7 @@ func (s *Service) ConnectionTestStart() error {
 				log.Info("Connection TEST: ", msg)
 			}
 		}()
-		ci, err := cTester.Test(*svrs, s.Preferences().Session, s.GetConnectionParams(), statusNotifyChan)
+		ci, err := cTester.Test(s.GetConnectionParams(), statusNotifyChan)
 		if err != nil {
 			log.Info("Connection TEST Failed: ", err.Error())
 			s._evtReceiver.OnConnectionTestResult(err, conntest.GoodConnectionInfo{})

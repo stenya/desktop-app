@@ -63,6 +63,18 @@ type ConnectMetadata struct {
 	FastestGatewaysExcludeList []string
 }
 
+type PortType int
+
+const (
+	UDP PortType = 0
+	TCP PortType = 1
+)
+
+type PortData struct {
+	Protocol PortType
+	Port     int
+}
+
 // Connect request to establish new VPN connection
 type ConnectionParams struct {
 	Metadata ConnectMetadata
@@ -84,10 +96,8 @@ type ConnectionParams struct {
 	FirewallOnDuringConnection bool
 
 	WireGuardParameters struct {
-		// Port in use only for Single-Hop connections
-		Port struct {
-			Port int
-		}
+		// UDP port (in use only for Single-Hop connections)
+		Port PortData
 
 		EntryVpnServer struct {
 			Hosts []api_types.WireGuardServerHostInfo
@@ -113,11 +123,8 @@ type ConnectionParams struct {
 			Password string
 		}
 
-		Port struct {
-			Protocol int
-			// Port number in use only for Single-Hop connections
-			Port int
-		}
+		// PortData.Port: Port number in use only for Single-Hop connections
+		Port PortData
 	}
 }
 
